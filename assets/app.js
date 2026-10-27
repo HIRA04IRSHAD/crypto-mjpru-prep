@@ -105,19 +105,75 @@ function videos(md) {
     return `<div class="vids">${cards.join("")}</div>\n\n`;
   });
 }
+// Tapped cards become a full-width YouTube player (IFrame API) with speed buttons and a full-screen button.
+// YouTube's embedded player accepts 0.25×–2× only; higher rates are silently capped at 2×.
+let ytApi = null;
+function loadYT() {
+  return ytApi ??= new Promise((resolve, reject) => {
+    if (window.YT && window.YT.Player) return resolve(window.YT);
+    window.onYouTubeIframeAPIReady = () => resolve(window.YT);
+    const s = document.createElement("script");
+    s.src = "https://www.youtube.com/iframe_api";
+    s.onerror = reject;
+    document.head.append(s);
+  });
+}
+const savedRate = () => { const r = Number(load("vid-rate", 1)); return r > 0 ? r : 1; };
 function playVideo(btn) {
-  const id = btn.dataset.yt, frame = document.createElement("iframe");
-  frame.src = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0`;
-  frame.title = btn.querySelector(".vid-t").textContent;
-  frame.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
-  frame.allowFullscreen = true;
-  const thumb = btn.querySelector(".vid-thumb");
-  const box = document.createElement("span"); box.className = "vid-thumb vid-on"; box.append(frame);
+  const id = btn.dataset.yt, title = btn.querySelector(".vid-t").textContent;
+  const box = document.createElement("div"); box.className = "vid-thumb vid-on";
+  const slot = document.createElement("div"); box.append(slot);
+  const bar = document.createElement("div"); bar.className = "vid-bar";
   const card = document.createElement("div"); card.className = "vid playing";
-  card.append(box, btn.querySelector(".vid-t"), btn.querySelector(".vid-c"));
+  card.append(box, btn.querySelector(".vid-t"), btn.querySelector(".vid-c"), bar);
+  btn.replaceWith(card);
+  card.scrollIntoView({ block: "start", behavior: reduceMotion ? "auto" : "smooth" });
+
+  const fs = document.createElement("button"); fs.type = "button"; fs.className = "vid-btn"; fs.textContent = "⛶ Full screen";
+  // Real full screen where allowed; otherwise (some embedded browsers) the player fills the window instead.
+  const setMax = on => { card.classList.toggle("vid-max", on); document.body.classList.toggle("vid-max-open", on); fs.textContent = on ? "✕ Exit full size" : "⛶ Full screen"; };
+  fs.addEventListener("click", () => {
+    if (card.classList.contains("vid-max")) return setMax(false);
+    const req = box.requestFullscreen || box.webkitRequestFullscreen;
+    try { const p = req && req.call(box); if (p && p.catch) p.catch(() => setMax(true)); } catch (e) { setMax(true); }
+    setTimeout(() => { if (!document.fullscreenElement && !document.webkitFullscreenElement) setMax(true); }, 600);
+  });
+  addEventListener("keydown", e => { if (e.key === "Escape" && card.classList.contains("vid-max")) setMax(false); });
   const yt = document.createElement("a"); yt.className = "vid-yt"; yt.href = `https://www.youtube.com/watch?v=${id}`; yt.target = "_blank"; yt.rel = "noopener"; yt.textContent = "Open on YouTube ↗";
-  card.append(yt);
-  thumb.remove(); btn.replaceWith(card);
+
+  const fallback = () => {   // API blocked: plain embed, YouTube's own controls only
+    const frame = document.createElement("iframe");
+    frame.src = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&playsinline=1`;
+    frame.title = title; frame.allowFullscreen = true;
+    frame.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+    slot.replaceWith(frame); bar.append(fs, yt);
+  };
+  loadYT().then(YT => {
+    new YT.Player(slot, {
+      host: "https://www.youtube-nocookie.com", videoId: id,
+      playerVars: { autoplay: 1, rel: 0, playsinline: 1 },
+      events: {
+        onReady: e => {
+          const p = e.target, rates = p.getAvailablePlaybackRates().filter(r => r >= 1);
+          const label = document.createElement("span"); label.className = "vid-sp-l"; label.textContent = "Speed";
+          const group = document.createElement("span"); group.className = "vid-speeds"; group.setAttribute("role", "group"); group.setAttribute("aria-label", "Playback speed");
+          const mark = r => group.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(Number(b.dataset.rate) === r)));
+          rates.forEach(r => {
+            const b = document.createElement("button"); b.type = "button"; b.className = "vid-btn"; b.dataset.rate = r; b.textContent = r + "×";
+            b.addEventListener("click", () => { p.setPlaybackRate(r); save("vid-rate", r); mark(r); });
+            group.append(b);
+          });
+          const want = rates.includes(savedRate()) ? savedRate() : 1;
+          p.setPlaybackRate(want); mark(want);
+          p.addEventListener("onPlaybackRateChange", ev => mark(ev.data));
+          const note = document.createElement("span"); note.className = "vid-note"; note.textContent = "2× is YouTube's limit";
+          bar.append(label, group, note, fs, yt);
+          p.playVideo();
+        }
+      }
+    });
+    const frame = box.querySelector("iframe"); if (frame) frame.title = title;
+  }).catch(fallback);
 }
 document.addEventListener("click", e => { const b = e.target.closest("button.vid"); if (b) playVideo(b); });
 
